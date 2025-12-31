@@ -1,0 +1,306 @@
+# 🐳 SecureScan Framework - Development Environment
+# Complete Docker Compose setup for local development
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # 📊 DATABASE SERVICES
+  # =============================================================================
+  
+  postgres:
+    image: postgres:15-alpine
+    container_name: securescan-postgres
+    environment:
+      POSTGRES_DB: securescan
+      POSTGRES_USER: securescan
+      POSTGRES_PASSWORD: securescan_dev_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U securescan -d securescan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - securescan-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: securescan-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass securescan_redis_password
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - securescan-network
+
+  # =============================================================================
+  # 🔍 SEARCH & ANALYTICS
+  # =============================================================================
+  
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: securescan-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - cluster.name=securescan-cluster
+      - node.name=securescan-node
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - securescan-network
+
+  # =============================================================================
+  # 🏗️ APPLICATION SERVICES
+  # =============================================================================
+  
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: securescan-backend
+    environment:
+      - DATABASE_URL=postgresql://securescan:securescan_dev_password@postgres:5432/securescan
+      - REDIS_URL=redis://:securescan_redis_password@redis:6379/0
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - SECRET_KEY=dev_secret_key_change_in_production
+      - DEBUG=true
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For scanner containers
+      - scanner_cache:/app/scanner_cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: securescan-worker
+    environment:
+      - DATABASE_URL=postgresql://securescan:securescan_dev_password@postgres:5432/securescan
+      - REDIS_URL=redis://:securescan_redis_password@redis:6379/0
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - SECRET_KEY=dev_secret_key_change_in_production
+      - DEBUG=true
+    volumes:
+      - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock  # For scanner containers
+      - scanner_cache:/app/scanner_cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    container_name: securescan-flower
+    environment:
+      - REDIS_URL=redis://:securescan_redis_password@redis:6379/0
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.workers.celery_app flower --port=5555
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: securescan-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+      - NODE_ENV=development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # 📊 MONITORING SERVICES
+  # =============================================================================
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: securescan-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: securescan-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/monitoring/grafana/:/etc/grafana/provisioning/
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # 🔧 UTILITY SERVICES
+  # =============================================================================
+  
+  nginx:
+    image: nginx:alpine
+    container_name: securescan-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d
+      - ./infrastructure/ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - securescan-network
+    restart: unless-stopped
+
+  # Scanner containers (pre-pulled for faster execution)
+  semgrep:
+    image: returntocorp/semgrep:latest
+    container_name: securescan-semgrep-cache
+    command: sleep infinity
+    networks:
+      - securescan-network
+    restart: "no"
+
+  trivy:
+    image: aquasec/trivy:latest
+    container_name: securescan-trivy-cache
+    command: sleep infinity
+    networks:
+      - securescan-network
+    restart: "no"
+
+  zap:
+    image: owasp/zap2docker-stable:latest
+    container_name: securescan-zap-cache
+    command: sleep infinity
+    networks:
+      - securescan-network
+    restart: "no"
+
+  gitleaks:
+    image: zricethezav/gitleaks:latest
+    container_name: securescan-gitleaks-cache
+    command: sleep infinity
+    networks:
+      - securescan-network
+    restart: "no"
+
+  checkov:
+    image: bridgecrew/checkov:latest
+    container_name: securescan-checkov-cache
+    command: sleep infinity
+    networks:
+      - securescan-network
+    restart: "no"
+
+# =============================================================================
+# 📦 VOLUMES
+# =============================================================================
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  scanner_cache:
+    driver: local
+
+# =============================================================================
+# 🌐 NETWORKS
+# =============================================================================
+
+networks:
+  securescan-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

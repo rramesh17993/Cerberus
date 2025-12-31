@@ -1,0 +1,189 @@
+version: '3.8'
+
+services:
+  # Test Database
+  test-db:
+    image: postgres:15-alpine
+    container_name: securescan-test-db
+    environment:
+      POSTGRES_DB: securescan_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5433:5432"
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+      - ./fixtures/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d securescan_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - test-network
+
+  # Test Redis
+  test-redis:
+    image: redis:7-alpine
+    container_name: securescan-test-redis
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - test_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - test-network
+
+  # Test API Server
+  test-api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.test
+    container_name: securescan-test-api
+    environment:
+      - DATABASE_URL=postgresql://test:test@test-db:5432/securescan_test
+      - REDIS_URL=redis://test-redis:6379
+      - JWT_SECRET=test_jwt_secret
+      - LOG_LEVEL=debug
+      - TESTING=true
+    ports:
+      - "8001:8000"
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    volumes:
+      - ../backend:/app
+      - test_uploads:/app/uploads
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Test Frontend
+  test-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.test
+    container_name: securescan-test-frontend
+    environment:
+      - REACT_APP_API_URL=http://test-api:8000
+      - REACT_APP_WS_URL=ws://test-api:8000/ws
+      - NODE_ENV=test
+    ports:
+      - "3001:3000"
+    depends_on:
+      - test-api
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    networks:
+      - test-network
+
+  # Scanner Images for Testing
+  scanner-semgrep:
+    image: semgrep/semgrep:latest
+    container_name: test-semgrep
+    command: ["sleep", "infinity"]
+    volumes:
+      - test_scan_data:/scan
+    networks:
+      - test-network
+
+  scanner-trivy:
+    image: aquasec/trivy:latest
+    container_name: test-trivy
+    command: ["sleep", "infinity"]
+    volumes:
+      - test_scan_data:/scan
+    networks:
+      - test-network
+
+  scanner-zap:
+    image: owasp/zap2docker-stable:latest
+    container_name: test-zap
+    command: ["sleep", "infinity"]
+    volumes:
+      - test_scan_data:/scan
+    networks:
+      - test-network
+
+  scanner-gitleaks:
+    image: zricethezav/gitleaks:latest
+    container_name: test-gitleaks
+    command: ["sleep", "infinity"]
+    volumes:
+      - test_scan_data:/scan
+    networks:
+      - test-network
+
+  scanner-checkov:
+    image: bridgecrew/checkov:latest
+    container_name: test-checkov
+    command: ["sleep", "infinity"]
+    volumes:
+      - test_scan_data:/scan
+    networks:
+      - test-network
+
+  # Load Testing
+  load-test:
+    image: loadimpact/k6:latest
+    container_name: securescan-load-test
+    volumes:
+      - ./load-tests:/scripts
+    command: ["sleep", "infinity"]
+    networks:
+      - test-network
+    profiles:
+      - load-testing
+
+  # Performance Monitoring
+  test-monitoring:
+    image: prom/prometheus:latest
+    container_name: securescan-test-monitoring
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.test.yml:/etc/prometheus/prometheus.yml
+      - test_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=1d'
+      - '--web.enable-lifecycle'
+    networks:
+      - test-network
+    profiles:
+      - monitoring
+
+volumes:
+  test_postgres_data:
+    driver: local
+  test_redis_data:
+    driver: local
+  test_uploads:
+    driver: local
+  test_scan_data:
+    driver: local
+  test_prometheus_data:
+    driver: local
+
+networks:
+  test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

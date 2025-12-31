@@ -1,0 +1,358 @@
+version: '3.8'
+
+services:
+  # Nginx Load Balancer & SSL Termination
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: securescan-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/ssl/certs:ro
+      - ./nginx/logs:/var/log/nginx
+      - frontend_build:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - securescan-network
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # API Backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: securescan-api
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - LOG_LEVEL=info
+      - ENVIRONMENT=production
+      - SENTRY_DSN=${SENTRY_DSN}
+      - SCANNER_TIMEOUT=600
+      - MAX_CONCURRENT_SCANS=5
+    volumes:
+      - uploads:/app/uploads
+      - scan_results:/app/scan_results
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        - REACT_APP_API_URL=${FRONTEND_API_URL}
+        - REACT_APP_WS_URL=${FRONTEND_WS_URL}
+        - REACT_APP_SENTRY_DSN=${FRONTEND_SENTRY_DSN}
+    container_name: securescan-frontend
+    restart: unless-stopped
+    volumes:
+      - frontend_build:/app/build
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: securescan-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/backup:/backup
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: securescan-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/etc/redis/redis.conf:ro
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Celery Worker for Background Tasks
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: securescan-worker
+    restart: unless-stopped
+    command: celery -A app.core.celery worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - LOG_LEVEL=info
+      - ENVIRONMENT=production
+    volumes:
+      - uploads:/app/uploads
+      - scan_results:/app/scan_results
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+
+  # Celery Beat Scheduler
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: securescan-scheduler
+    restart: unless-stopped
+    command: celery -A app.core.celery beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - LOG_LEVEL=info
+      - ENVIRONMENT=production
+    volumes:
+      - scheduler_data:/app/celerybeat-schedule
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - securescan-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: securescan-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - securescan-network
+    profiles:
+      - monitoring
+
+  # Grafana Dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: securescan-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - securescan-network
+    profiles:
+      - monitoring
+
+  # Scanner Images
+  semgrep:
+    image: semgrep/semgrep:1.45.0
+    container_name: scanner-semgrep
+    command: ["sleep", "infinity"]
+    volumes:
+      - scan_workdir:/tmp/scan
+    networks:
+      - securescan-network
+    profiles:
+      - scanners
+
+  trivy:
+    image: aquasec/trivy:0.46.1
+    container_name: scanner-trivy
+    command: ["sleep", "infinity"]
+    volumes:
+      - scan_workdir:/tmp/scan
+      - trivy_cache:/root/.cache/trivy
+    networks:
+      - securescan-network
+    profiles:
+      - scanners
+
+  zap:
+    image: owasp/zap2docker-stable:2.14.0
+    container_name: scanner-zap
+    command: ["sleep", "infinity"]
+    volumes:
+      - scan_workdir:/tmp/scan
+    networks:
+      - securescan-network
+    profiles:
+      - scanners
+
+  gitleaks:
+    image: zricethezav/gitleaks:v8.18.0
+    container_name: scanner-gitleaks
+    command: ["sleep", "infinity"]
+    volumes:
+      - scan_workdir:/tmp/scan
+    networks:
+      - securescan-network
+    profiles:
+      - scanners
+
+  checkov:
+    image: bridgecrew/checkov:3.0.34
+    container_name: scanner-checkov
+    command: ["sleep", "infinity"]
+    volumes:
+      - scan_workdir:/tmp/scan
+    networks:
+      - securescan-network
+    profiles:
+      - scanners
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  uploads:
+    driver: local
+  scan_results:
+    driver: local
+  scan_workdir:
+    driver: local
+  trivy_cache:
+    driver: local
+  frontend_build:
+    driver: local
+  scheduler_data:
+    driver: local
+
+networks:
+  securescan-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16

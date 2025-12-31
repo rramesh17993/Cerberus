@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  
+  <!-- Title and Description -->
+  <title>SecureScan Framework - Security Scanning Platform</title>
+  <meta name="description" content="Comprehensive security scanning and vulnerability management platform integrating SAST, DAST, SCA, IaC, and Secrets scanning" />
+  <meta name="keywords" content="security, scanning, vulnerability, SAST, DAST, SCA, IaC, secrets, DevSecOps, SARIF" />
+  <meta name="author" content="SecureScan Team" />
+  
+  <!-- Open Graph / Social Media -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="SecureScan Framework - Security Scanning Platform" />
+  <meta property="og:description" content="Comprehensive security scanning and vulnerability management platform" />
+  <meta property="og:image" content="/og-image.png" />
+  <meta property="og:url" content="https://securescan.io" />
+  <meta property="og:site_name" content="SecureScan Framework" />
+  
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="SecureScan Framework" />
+  <meta name="twitter:description" content="Comprehensive security scanning and vulnerability management platform" />
+  <meta name="twitter:image" content="/og-image.png" />
+  
+  <!-- PWA Meta Tags -->
+  <meta name="theme-color" content="#1f2937" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SecureScan" />
+  <meta name="application-name" content="SecureScan Framework" />
+  <meta name="msapplication-TileColor" content="#1f2937" />
+  <meta name="msapplication-config" content="/browserconfig.xml" />
+  
+  <!-- Icons -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#1f2937" />
+  
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json" />
+  
+  <!-- Preconnect to external domains -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  
+  <!-- Font Loading -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet" />
+  
+  <!-- Preload critical resources -->
+  <link rel="modulepreload" href="/src/main.tsx" />
+  
+  <!-- Security Headers (CSP will be set by server) -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+  <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
+  
+  <!-- Loading Styles -->
+  <style>
+    /* Critical CSS for loading screen */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+    
+    html {
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+      -moz-tab-size: 4;
+      tab-size: 4;
+    }
+    
+    body {
+      margin: 0;
+      font-family: inherit;
+      line-height: inherit;
+      background-color: #ffffff;
+      color: #111827;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #111827;
+        color: #f9fafb;
+      }
+    }
+    
+    /* Loading screen styles */
+    .loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.5s ease-out;
+    }
+    
+    .loading-content {
+      text-align: center;
+      color: white;
+    }
+    
+    .loading-logo {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 24px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      backdrop-filter: blur(10px);
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    
+    .loading-title {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      opacity: 0.95;
+    }
+    
+    .loading-subtitle {
+      font-size: 14px;
+      opacity: 0.7;
+      margin-bottom: 32px;
+    }
+    
+    .loading-spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+      margin: 0 auto;
+    }
+    
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.8;
+        transform: scale(1.05);
+      }
+    }
+    
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    
+    /* Hide loading screen when app loads */
+    .app-loaded .loading-screen {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    /* Error screen styles */
+    .error-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #fef2f2;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 2rem;
+    }
+    
+    .error-content {
+      max-width: 500px;
+      text-align: center;
+      background: white;
+      padding: 2rem;
+      border-radius: 12px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+    
+    .error-icon {
+      font-size: 48px;
+      margin-bottom: 1rem;
+    }
+    
+    .error-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #dc2626;
+      margin-bottom: 0.5rem;
+    }
+    
+    .error-message {
+      color: #6b7280;
+      margin-bottom: 1.5rem;
+    }
+    
+    .error-button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.75rem 1.5rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .error-button:hover {
+      background: #2563eb;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-content">
+      <div class="loading-logo">🛡️</div>
+      <div class="loading-title">SecureScan Framework</div>
+      <div class="loading-subtitle">Initializing security dashboard...</div>
+      <div class="loading-spinner"></div>
+    </div>
+  </div>
+  
+  <!-- Error Screen (shown if JS fails) -->
+  <div id="error-screen" class="error-screen">
+    <div class="error-content">
+      <div class="error-icon">⚠️</div>
+      <div class="error-title">JavaScript Required</div>
+      <div class="error-message">
+        SecureScan Framework requires JavaScript to function properly. 
+        Please enable JavaScript in your browser and refresh the page.
+      </div>
+      <button class="error-button" onclick="window.location.reload()">
+        Refresh Page
+      </button>
+    </div>
+  </div>
+  
+  <!-- React App Root -->
+  <div id="root"></div>
+  
+  <!-- Fallback for no-JS users -->
+  <noscript>
+    <style>
+      #loading-screen { display: none !important; }
+      #error-screen { display: flex !important; }
+    </style>
+  </noscript>
+  
+  <!-- Application Scripts -->
+  <script type="module" src="/src/main.tsx"></script>
+  
+  <!-- Loading Screen Management -->
+  <script>
+    // Show error screen if app doesn't load within 10 seconds
+    const loadingTimeout = setTimeout(() => {
+      const loadingScreen = document.getElementById('loading-screen');
+      const errorScreen = document.getElementById('error-screen');
+      if (loadingScreen && errorScreen) {
+        loadingScreen.style.display = 'none';
+        errorScreen.style.display = 'flex';
+      }
+    }, 10000);
+    
+    // Hide loading screen when app is ready
+    window.addEventListener('load', () => {
+      clearTimeout(loadingTimeout);
+      setTimeout(() => {
+        document.body.classList.add('app-loaded');
+        // Remove loading screen after animation
+        setTimeout(() => {
+          const loadingScreen = document.getElementById('loading-screen');
+          if (loadingScreen) {
+            loadingScreen.remove();
+          }
+        }, 500);
+      }, 1000); // Give React a moment to render
+    });
+    
+    // Global error handler for loading issues
+    window.addEventListener('error', (event) => {
+      clearTimeout(loadingTimeout);
+      const loadingScreen = document.getElementById('loading-screen');
+      const errorScreen = document.getElementById('error-screen');
+      if (loadingScreen && errorScreen) {
+        loadingScreen.style.display = 'none';
+        errorScreen.style.display = 'flex';
+      }
+    });
+  </script>
+  
+  <!-- Analytics placeholder (add your analytics code here) -->
+  <!-- Google Analytics, Mixpanel, etc. -->
+  
+  <!-- Performance monitoring placeholder -->
+  <!-- Sentry, LogRocket, etc. -->
+</body>
+</html>
