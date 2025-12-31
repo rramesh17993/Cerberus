@@ -407,7 +407,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - 🐛 **Bug Reports**: [GitHub Issues](https://github.com/yourusername/securescan-framework/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/securescan-framework/discussions)
-- 📧 **Email**: security@yourdomain.com
+- 📧 **Email**: rramesh17993@gmail.com
 - 💭 **Discord**: [Join our community](https://discord.gg/securescan)
 
 ---
